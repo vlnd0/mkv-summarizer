@@ -1,0 +1,8 @@
+.env
+.mcp.json
+.claude/
+.DS_Store
+*.log
+tmp/
+temp/
+~/.config/mkv-summarizer/config
