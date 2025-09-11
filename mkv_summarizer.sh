@@ -621,35 +621,99 @@ process_chunks() {
     echo "$transcript_file"
 }
 
-# Summarize with Claude (Russian only)
-summarize_with_claude() {
+# Estimate transcript size in tokens (rough approximation)
+estimate_token_count() {
+    local text="$1"
+    local word_count=$(echo "$text" | wc -w)
+    # Rough estimate: 1 token ≈ 0.75 words for Russian/English text
+    local estimated_tokens=$(( word_count * 4 / 3 ))
+    echo "$estimated_tokens"
+}
+
+# Split transcript into chunks for processing
+split_transcript_for_claude() {
     local transcript_file="$1"
-    local output_file="$2"
+    local max_words_per_chunk=10000  # Conservative limit for Claude
 
-    echo -e "${GREEN}Generating Russian summary with Claude...${NC}"
+    echo -e "${BLUE}Splitting transcript for Claude processing...${NC}" >&2
+    
+    # Create chunks directory
+    local chunks_dir="$TEMP_DIR/transcript_chunks"
+    mkdir -p "$chunks_dir"
 
-    # Read and escape transcript for JSON
-    local transcript=$(cat "$transcript_file" | jq -Rs .)
+    # Split transcript by word count, preserving sentence boundaries
+    local chunk_num=0
+    local current_chunk=""
+    local current_word_count=0
+    local chunks=()
 
-    # Create the prompt for Russian summary
-    local russian_prompt="You are analyzing a transcript from a video. Please provide a summary IN RUSSIAN:
+    # Read transcript and split into sentences
+    while IFS= read -r line; do
+        # Skip empty lines and separators
+        if [[ -z "$line" || "$line" == "---" ]]; then
+            continue
+        fi
 
-1. A comprehensive SUMMARY of the entire conversation/content (КРАТКОЕ ИЗЛОЖЕНИЕ)
-2. KEY POINTS (bullet points of the most important information) (КЛЮЧЕВЫЕ МОМЕНТЫ)
-3. MAIN TOPICS discussed (ОСНОВНЫЕ ТЕМЫ)
-4. Any ACTION ITEMS or important conclusions (ПЛАН ДЕЙСТВИЙ)
+        local line_word_count=$(echo "$line" | wc -w)
 
-Here is the transcript:
+        # If adding this line would exceed limit, save current chunk
+        if [ $((current_word_count + line_word_count)) -gt $max_words_per_chunk ] && [ -n "$current_chunk" ]; then
+            local chunk_file="$chunks_dir/chunk_$chunk_num.txt"
+            echo "$current_chunk" > "$chunk_file"
+            chunks+=("$chunk_file")
+            echo -e "  Created chunk $((chunk_num + 1)): $current_word_count words" >&2
 
-$transcript
+            current_chunk="$line"
+            current_word_count=$line_word_count
+            ((chunk_num++))
+        else
+            # Add line to current chunk
+            if [ -n "$current_chunk" ]; then
+                current_chunk="$current_chunk"$'\n'"$line"
+            else
+                current_chunk="$line"
+            fi
+            current_word_count=$((current_word_count + line_word_count))
+        fi
+    done < "$transcript_file"
 
-Please format your response in clear sections with headers. IMPORTANT: Provide the summary entirely in Russian, regardless of the original transcript language."
+    # Save the last chunk if it has content
+    if [ -n "$current_chunk" ]; then
+        local chunk_file="$chunks_dir/chunk_$chunk_num.txt"
+        echo "$current_chunk" > "$chunk_file"
+        chunks+=("$chunk_file")
+        echo -e "  Created chunk $((chunk_num + 1)): $current_word_count words" >&2
+    fi
 
-    echo -e "${BLUE}Generating Russian summary...${NC}"
+    echo -e "${GREEN}Created ${#chunks[@]} transcript chunks${NC}" >&2
+    printf '%s\n' "${chunks[@]}"
+}
 
-    # Create request body for Russian
-    local russian_request_body=$(jq -n \
-        --arg content "$russian_prompt" \
+# Summarize a single transcript chunk with Claude
+summarize_chunk_with_claude() {
+    local chunk_file="$1"
+    local chunk_num="$2"
+    local total_chunks="$3"
+
+    local transcript_chunk=$(cat "$chunk_file" | jq -Rs .)
+
+    # Create chunk-specific prompt
+    local chunk_prompt="You are analyzing part $chunk_num of $total_chunks from a video transcript. Please provide a summary IN RUSSIAN:
+
+For this chunk, provide:
+1. SUMMARY of this part (КРАТКОЕ ИЗЛОЖЕНИЕ ЧАСТИ)
+2. KEY POINTS from this section (КЛЮЧЕВЫЕ МОМЕНТЫ)
+3. MAIN TOPICS in this part (ОСНОВНЫЕ ТЕМЫ)
+
+Here is the transcript chunk:
+
+$transcript_chunk
+
+Please format your response clearly. IMPORTANT: Provide the summary entirely in Russian, regardless of the original transcript language."
+
+    # Create request body
+    local request_body=$(jq -n \
+        --arg content "$chunk_prompt" \
         '{
             model: "claude-3-5-sonnet-20241022",
             max_tokens: 8000,
@@ -661,31 +725,268 @@ Please format your response in clear sections with headers. IMPORTANT: Provide t
             ]
         }')
 
-    # Make API call to Claude for Russian
-    local russian_response=$(curl -s --request POST \
-        --url https://api.anthropic.com/v1/messages \
-        --header "x-api-key: $ANTHROPIC_API_KEY" \
-        --header "anthropic-version: 2023-06-01" \
-        --header "content-type: application/json" \
-        --data "$russian_request_body")
+    echo -e "${BLUE}Processing chunk $chunk_num/$total_chunks with Claude...${NC}"
 
-    # Extract content from Russian response
-    local russian_summary=$(echo "$russian_response" | jq -r '.content[0].text // empty')
+    # Make API call with retry logic
+    local max_retries=3
+    local retry_count=0
+    local response=""
 
-    if [ -z "$russian_summary" ]; then
-        echo -e "${RED}Error: Russian summary generation failed${NC}"
-        echo "Response: $russian_response"
-        return 1
-    fi
+    while [ $retry_count -lt $max_retries ]; do
+        response=$(curl -s --request POST \
+            --url https://api.anthropic.com/v1/messages \
+            --header "x-api-key: $ANTHROPIC_API_KEY" \
+            --header "anthropic-version: 2023-06-01" \
+            --header "content-type: application/json" \
+            --data "$request_body")
 
-    # Save Russian summary to output file
+        # Check for rate limit error
+        if echo "$response" | grep -q "rate_limit_error"; then
+            retry_count=$((retry_count + 1))
+            local wait_time=$((retry_count * 30))  # Exponential backoff: 30s, 60s, 90s
+            echo -e "${YELLOW}Rate limit hit. Waiting ${wait_time}s before retry ${retry_count}/${max_retries}...${NC}"
+            sleep $wait_time
+            continue
+        fi
+
+        # Check for successful response
+        local chunk_summary=$(echo "$response" | jq -r '.content[0].text // empty')
+        if [ -n "$chunk_summary" ]; then
+            echo "$chunk_summary"
+            return 0
+        else
+            retry_count=$((retry_count + 1))
+            echo -e "${YELLOW}Empty response, retrying ${retry_count}/${max_retries}...${NC}"
+            sleep 10
+        fi
+    done
+
+    # All retries failed
+    echo -e "${RED}Error: Failed to process chunk $chunk_num after $max_retries attempts${NC}"
+    echo "Response: $response"
+    return 1
+}
+
+# Combine chunk summaries into final summary
+combine_chunk_summaries() {
+    local summaries=("$@")
+    local combined_file="$TEMP_DIR/combined_summary.txt"
+
+    # Combine all chunk summaries
     {
-        echo "# Резюме видео"
+        echo "# Анализ по частям"
         echo ""
-        echo "$russian_summary"
-    } > "$output_file"
+        for i in "${!summaries[@]}"; do
+            echo "## Часть $((i + 1))"
+            echo ""
+            echo "${summaries[i]}"
+            echo ""
+            echo "---"
+            echo ""
+        done
+    } > "$combined_file"
 
-    echo -e "${GREEN}Russian summary generated successfully${NC}"
+    # Create final synthesis prompt
+    local synthesis_prompt="Based on the following partial summaries of a video, create a comprehensive final summary IN RUSSIAN:
+
+1. COMPREHENSIVE SUMMARY of the entire content (ОБЩЕЕ РЕЗЮМЕ)
+2. KEY POINTS from all parts (КЛЮЧЕВЫЕ МОМЕНТЫ)
+3. MAIN TOPICS discussed throughout (ОСНОВНЫЕ ТЕМЫ)
+4. ACTION ITEMS or important conclusions (ПЛАН ДЕЙСТВИЙ)
+
+Here are the partial summaries:
+
+$(cat "$combined_file" | jq -Rs .)
+
+Please create a coherent, comprehensive summary that synthesizes all the information. IMPORTANT: Provide the final summary entirely in Russian."
+
+    # Create synthesis request
+    local synthesis_request=$(jq -n \
+        --arg content "$synthesis_prompt" \
+        '{
+            model: "claude-3-5-sonnet-20241022",
+            max_tokens: 8000,
+            messages: [
+                {
+                    role: "user",
+                    content: $content
+                }
+            ]
+        }')
+
+    echo -e "${GREEN}Creating final comprehensive summary...${NC}"
+
+    # Make synthesis API call with retry
+    local max_retries=3
+    local retry_count=0
+    local response=""
+
+    while [ $retry_count -lt $max_retries ]; do
+        response=$(curl -s --request POST \
+            --url https://api.anthropic.com/v1/messages \
+            --header "x-api-key: $ANTHROPIC_API_KEY" \
+            --header "anthropic-version: 2023-06-01" \
+            --header "content-type: application/json" \
+            --data "$synthesis_request")
+
+        # Check for rate limit error
+        if echo "$response" | grep -q "rate_limit_error"; then
+            retry_count=$((retry_count + 1))
+            local wait_time=$((retry_count * 30))
+            echo -e "${YELLOW}Rate limit hit. Waiting ${wait_time}s before final synthesis retry ${retry_count}/${max_retries}...${NC}"
+            sleep $wait_time
+            continue
+        fi
+
+        # Check for successful response
+        local final_summary=$(echo "$response" | jq -r '.content[0].text // empty')
+        if [ -n "$final_summary" ]; then
+            echo "$final_summary"
+            return 0
+        else
+            retry_count=$((retry_count + 1))
+            echo -e "${YELLOW}Empty synthesis response, retrying ${retry_count}/${max_retries}...${NC}"
+            sleep 10
+        fi
+    done
+
+    # Synthesis failed, return combined summaries as fallback
+    echo -e "${YELLOW}Synthesis failed, using combined chunk summaries${NC}"
+    cat "$combined_file"
+}
+
+# Summarize with Claude (Russian only) - Updated with chunking
+summarize_with_claude() {
+    local transcript_file="$1"
+    local output_file="$2"
+
+    echo -e "${GREEN}Generating Russian summary with Claude...${NC}"
+
+    # Check transcript size
+    local transcript_text=$(cat "$transcript_file")
+    local word_count=$(echo "$transcript_text" | wc -w)
+    local estimated_tokens=$(estimate_token_count "$transcript_text")
+
+    echo -e "${BLUE}Transcript size: $word_count words (~$estimated_tokens tokens)${NC}"
+
+    # If transcript is small enough, use original approach
+    if [ "$estimated_tokens" -le 20000 ]; then
+        echo -e "${GREEN}Transcript is small enough for single request${NC}"
+
+        local transcript_escaped=$(echo "$transcript_text" | jq -Rs .)
+        local prompt="You are analyzing a transcript from a video. Please provide a summary IN RUSSIAN:
+
+1. A comprehensive SUMMARY of the entire conversation/content (КРАТКОЕ ИЗЛОЖЕНИЕ)
+2. KEY POINTS (bullet points of the most important information) (КЛЮЧЕВЫЕ МОМЕНТЫ)
+3. MAIN TOPICS discussed (ОСНОВНЫЕ ТЕМЫ)
+4. Any ACTION ITEMS or important conclusions (ПЛАН ДЕЙСТВИЙ)
+
+Here is the transcript:
+
+$transcript_escaped
+
+Please format your response in clear sections with headers. IMPORTANT: Provide the summary entirely in Russian, regardless of the original transcript language."
+
+        local request_body=$(jq -n \
+            --arg content "$prompt" \
+            '{
+                model: "claude-3-5-sonnet-20241022",
+                max_tokens: 8000,
+                messages: [
+                    {
+                        role: "user",
+                        content: $content
+                    }
+                ]
+            }')
+
+        # Make API call with retry logic
+        local max_retries=3
+        local retry_count=0
+
+        while [ $retry_count -lt $max_retries ]; do
+            local response=$(curl -s --request POST \
+                --url https://api.anthropic.com/v1/messages \
+                --header "x-api-key: $ANTHROPIC_API_KEY" \
+                --header "anthropic-version: 2023-06-01" \
+                --header "content-type: application/json" \
+                --data "$request_body")
+
+            # Check for rate limit error
+            if echo "$response" | grep -q "rate_limit_error"; then
+                retry_count=$((retry_count + 1))
+                local wait_time=$((retry_count * 60))  # 60s, 120s, 180s
+                echo -e "${YELLOW}Rate limit hit. Waiting ${wait_time}s before retry ${retry_count}/${max_retries}...${NC}"
+                sleep $wait_time
+                continue
+            fi
+
+            local summary=$(echo "$response" | jq -r '.content[0].text // empty')
+            if [ -n "$summary" ]; then
+                {
+                    echo "# Резюме видео"
+                    echo ""
+                    echo "$summary"
+                } > "$output_file"
+                echo -e "${GREEN}Russian summary generated successfully${NC}"
+                return 0
+            else
+                retry_count=$((retry_count + 1))
+                echo -e "${YELLOW}Empty response, retrying ${retry_count}/${max_retries}...${NC}"
+                sleep 15
+            fi
+        done
+
+        echo -e "${RED}Error: Summary generation failed after $max_retries attempts${NC}"
+        echo "Response: $response"
+        return 1
+    else
+        # Use chunked approach for large transcripts
+        echo -e "${YELLOW}Large transcript detected, using chunked processing${NC}"
+
+        # Split transcript into chunks
+        local chunks=()
+        while IFS= read -r line; do
+            [ -n "$line" ] && chunks+=("$line")
+        done < <(split_transcript_for_claude "$transcript_file")
+
+        if [ ${#chunks[@]} -eq 0 ]; then
+            echo -e "${RED}Error: No transcript chunks created${NC}"
+            return 1
+        fi
+
+        # Process each chunk
+        local chunk_summaries=()
+        for i in "${!chunks[@]}"; do
+            local chunk_summary
+            if chunk_summary=$(summarize_chunk_with_claude "${chunks[i]}" "$((i + 1))" "${#chunks[@]}"); then
+                chunk_summaries+=("$chunk_summary")
+                # Add delay between requests to avoid rate limits
+                if [ $((i + 1)) -lt ${#chunks[@]} ]; then
+                    echo -e "${BLUE}Waiting 15s between chunks to avoid rate limits...${NC}"
+                    sleep 15
+                fi
+            else
+                echo -e "${RED}Failed to process chunk $((i + 1))${NC}"
+                return 1
+            fi
+        done
+
+        # Combine summaries into final result
+        local final_summary
+        if final_summary=$(combine_chunk_summaries "${chunk_summaries[@]}"); then
+            {
+                echo "# Резюме видео"
+                echo ""
+                echo "$final_summary"
+            } > "$output_file"
+            echo -e "${GREEN}Chunked Russian summary generated successfully${NC}"
+            return 0
+        else
+            echo -e "${RED}Error: Failed to create final summary${NC}"
+            return 1
+        fi
+    fi
 }
 
 # Main execution
