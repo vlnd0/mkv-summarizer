@@ -12,6 +12,9 @@ TEMP_DIR="/tmp/mkv_summarizer_$$"
 CHUNK_DURATION=1200  # 20 minutes in seconds for safe chunking
 KEEP_TRANSCRIPT="${KEEP_TRANSCRIPT:-true}"  # Default: keep transcript
 ENABLE_SPEAKERS="${ENABLE_SPEAKERS:-false}"  # Default: no speaker diarization
+SAVE_ON_ERROR="${SAVE_ON_ERROR:-false}"  # Default: don't save on error
+START_CHUNK_INDEX="${START_CHUNK_INDEX:-0}"  # Default: start from beginning
+INIT_TRANSCRIPT_FILE="${INIT_TRANSCRIPT_FILE:-}"  # Default: empty transcript file
 INSTALL_PATH="/usr/local/bin/mkv-summarize"
 
 # Colors for output
@@ -64,6 +67,15 @@ KEEP_TRANSCRIPT=true
 # Enable speaker identification and timestamps (true/false)
 ENABLE_SPEAKERS=false
 
+# Save transcript on error (true/false)
+SAVE_ON_ERROR=false
+
+# Start chunk index (0 = beginning)
+START_CHUNK_INDEX=0
+
+# Initialize transcript from existing file (leave empty for new transcript)
+INIT_TRANSCRIPT_FILE=
+
 # Audio quality for extraction (lower = smaller file)
 AUDIO_BITRATE=64k
 
@@ -94,6 +106,9 @@ load_config() {
     CHUNK_DURATION="1200"
     KEEP_TRANSCRIPT="true"
     ENABLE_SPEAKERS="true"
+    SAVE_ON_ERROR="false"
+    START_CHUNK_INDEX="0"
+    INIT_TRANSCRIPT_FILE=""
 
     # Load config file if exists
     local config_file="$HOME/.config/mkv-summarizer/config"
@@ -107,6 +122,9 @@ load_config() {
     AUDIO_BITRATE="${AUDIO_BITRATE:-64k}"
     CHUNK_DURATION="${CHUNK_DURATION:-1200}"
     ENABLE_SPEAKERS="${ENABLE_SPEAKERS:-true}"
+    SAVE_ON_ERROR="${SAVE_ON_ERROR:-false}"
+    START_CHUNK_INDEX="${START_CHUNK_INDEX:-0}"
+    INIT_TRANSCRIPT_FILE="${INIT_TRANSCRIPT_FILE:-}"
 }
 
 # Help function
@@ -118,18 +136,25 @@ MKV Video Summarizer
 Usage: $(basename $0) [OPTIONS] <video.mkv>
 
 OPTIONS:
-    --no-transcript     Don't save the transcript file
-    --transcript        Save the transcript file (default)
-    --speakers          Enable speaker identification and timestamps
-    --no-speakers       Disable speaker identification (default)
-    --install          Install script system-wide
-    --help             Show this help message
+    --no-transcript       Don't save the transcript file
+    --transcript          Save the transcript file (default)
+    --speakers            Enable speaker identification and timestamps
+    --no-speakers         Disable speaker identification (default)
+    --save-on-error       Save transcript when chunk processing fails
+    --no-save-on-error    Don't save on error (default)
+    --start-chunk INDEX   Start processing from chunk index (0-based)
+    --init-transcript FILE Initialize transcript from existing file
+    --install             Install script system-wide
+    --help                Show this help message
 
 ENVIRONMENT:
-    OPENAI_API_KEY      Your OpenAI API key
-    ANTHROPIC_API_KEY   Your Anthropic API key
-    KEEP_TRANSCRIPT     Set to 'false' to disable transcript by default
-    ENABLE_SPEAKERS     Set to 'true' to enable speaker diarization by default
+    OPENAI_API_KEY       Your OpenAI API key
+    ANTHROPIC_API_KEY    Your Anthropic API key
+    KEEP_TRANSCRIPT      Set to 'false' to disable transcript by default
+    ENABLE_SPEAKERS      Set to 'true' to enable speaker diarization by default
+    SAVE_ON_ERROR        Set to 'true' to save transcript when chunks fail
+    START_CHUNK_INDEX    Set chunk index to start from (0-based)
+    INIT_TRANSCRIPT_FILE Path to existing transcript file to initialize from
 
 FILES:
     The summary will be saved as: <video_name>_summary.md (contains Russian summary)
@@ -141,6 +166,8 @@ EXAMPLES:
     $(basename $0) --no-transcript lecture.mkv
     $(basename $0) --speakers meeting.mkv
     $(basename $0) --speakers --no-transcript conference.mkv
+    $(basename $0) --save-on-error --start-chunk 5 movie.mkv
+    $(basename $0) --init-transcript existing_transcript.txt movie.mkv
     ENABLE_SPEAKERS=true $(basename $0) video.mkv
 
 EOF
@@ -151,6 +178,9 @@ EOF
 parse_args() {
     KEEP_TRANSCRIPT_ARG=""
     ENABLE_SPEAKERS_ARG=""
+    SAVE_ON_ERROR_ARG=""
+    START_CHUNK_INDEX_ARG=""
+    INIT_TRANSCRIPT_FILE_ARG=""
     INPUT_FILE=""
 
     while [[ $# -gt 0 ]]; do
@@ -177,6 +207,32 @@ parse_args() {
                 ENABLE_SPEAKERS_ARG="false"
                 shift
                 ;;
+            --save-on-error)
+                SAVE_ON_ERROR_ARG="true"
+                shift
+                ;;
+            --no-save-on-error)
+                SAVE_ON_ERROR_ARG="false"
+                shift
+                ;;
+            --start-chunk)
+                if [ -n "$2" ] && [[ "$2" =~ ^[0-9]+$ ]]; then
+                    START_CHUNK_INDEX_ARG="$2"
+                    shift 2
+                else
+                    echo -e "${RED}Error: --start-chunk requires a valid number${NC}"
+                    exit 1
+                fi
+                ;;
+            --init-transcript)
+                if [ -n "$2" ] && [ -f "$2" ]; then
+                    INIT_TRANSCRIPT_FILE_ARG="$(realpath "$2")"
+                    shift 2
+                else
+                    echo -e "${RED}Error: --init-transcript requires a valid existing file path${NC}"
+                    exit 1
+                fi
+                ;;
             *)
                 if [ -z "$INPUT_FILE" ]; then
                     INPUT_FILE="$1"
@@ -196,6 +252,18 @@ parse_args() {
 
     if [ ! -z "$ENABLE_SPEAKERS_ARG" ]; then
         ENABLE_SPEAKERS="$ENABLE_SPEAKERS_ARG"
+    fi
+
+    if [ ! -z "$SAVE_ON_ERROR_ARG" ]; then
+        SAVE_ON_ERROR="$SAVE_ON_ERROR_ARG"
+    fi
+
+    if [ ! -z "$START_CHUNK_INDEX_ARG" ]; then
+        START_CHUNK_INDEX="$START_CHUNK_INDEX_ARG"
+    fi
+
+    if [ ! -z "$INIT_TRANSCRIPT_FILE_ARG" ]; then
+        INIT_TRANSCRIPT_FILE="$INIT_TRANSCRIPT_FILE_ARG"
     fi
 
     if [ -z "$INPUT_FILE" ]; then
@@ -466,10 +534,23 @@ transcribe_audio() {
     fi
 }
 
+# Save current transcript to output location on error
+save_transcript_on_error() {
+    local transcript_file="$1"
+    local output_file="$2"
+
+    if [ "$SAVE_ON_ERROR" == "true" ] && [ -f "$transcript_file" ] && [ -s "$transcript_file" ]; then
+        echo -e "${YELLOW}Saving partial transcript due to error...${NC}" >&2
+        cp "$transcript_file" "$output_file"
+        echo -e "${GREEN}Partial transcript saved to: $output_file${NC}" >&2
+    fi
+}
+
 # Process all audio chunks
 process_chunks() {
     local audio_file="$1"
     local transcript_file="$TEMP_DIR/transcript.txt"
+    local output_transcript_file="$2"  # Add parameter for output file path
 
     # Get list of chunks (or single file) - read into array properly
     local chunks=()
@@ -483,27 +564,58 @@ process_chunks() {
         return 1
     fi
 
-    > "$transcript_file"  # Clear file
+    # Initialize transcript file - either empty or from existing file
+    if [ -n "$INIT_TRANSCRIPT_FILE" ] && [ -f "$INIT_TRANSCRIPT_FILE" ]; then
+        echo -e "${GREEN}Initializing transcript from existing file: $INIT_TRANSCRIPT_FILE${NC}" >&2
+        cp "$INIT_TRANSCRIPT_FILE" "$transcript_file"
+        echo -e "\n---\n" >> "$transcript_file"  # Add separator
+    else
+        > "$transcript_file"  # Clear file
+    fi
 
     local total=${#chunks[@]}
     local current=1
+    local start_index=${START_CHUNK_INDEX:-0}
 
+    # Validate start index
+    if [ "$start_index" -ge "$total" ]; then
+        echo -e "${RED}Error: Start chunk index ($start_index) is greater than total chunks ($total)${NC}" >&2
+        return 1
+    fi
+
+    if [ "$start_index" -gt 0 ]; then
+        echo -e "${YELLOW}Starting from chunk index: $start_index (skipping $start_index chunks)${NC}" >&2
+        current=$((start_index + 1))
+    fi
+
+    # Process chunks starting from the specified index
+    local chunk_index=0
     for chunk in "${chunks[@]}"; do
+        # Skip chunks before start index
+        if [ "$chunk_index" -lt "$start_index" ]; then
+            echo -e "${BLUE}Skipping chunk $((chunk_index+1))/$total${NC}" >&2
+            ((chunk_index++))
+            continue
+        fi
+
         echo -e "${YELLOW}Processing chunk $current/$total...${NC}" >&2
         echo -e "${BLUE}Chunk file: $chunk${NC}" >&2
 
         # Verify chunk file exists before transcription
         if [ ! -f "$chunk" ]; then
             echo -e "${RED}Error: Chunk file does not exist: $chunk${NC}" >&2
+            save_transcript_on_error "$transcript_file" "$output_transcript_file"
             return 1
         fi
 
         if ! transcribe_audio "$chunk" "$transcript_file"; then
             echo -e "${RED}Failed to transcribe chunk $current/$total${NC}" >&2
+            save_transcript_on_error "$transcript_file" "$output_transcript_file"
             return 1
         fi
         echo -e "\n---\n" >> "$transcript_file"
         ((current++))
+        ((chunk_index++))
     done
 
     echo "$transcript_file"
@@ -540,7 +652,7 @@ Please format your response in clear sections with headers. IMPORTANT: Provide t
         --arg content "$russian_prompt" \
         '{
             model: "claude-3-5-sonnet-20241022",
-            max_tokens: 4000,
+            max_tokens: 8000,
             messages: [
                 {
                     role: "user",
@@ -592,13 +704,20 @@ main() {
     echo -e "Output directory: $input_dir"
     echo -e "Transcript: $([ "$KEEP_TRANSCRIPT" == "true" ] && echo "Yes" || echo "No")"
     echo -e "Speaker identification: $([ "$ENABLE_SPEAKERS" == "true" ] && echo "Yes" || echo "No")"
+    echo -e "Save on error: $([ "$SAVE_ON_ERROR" == "true" ] && echo "Yes" || echo "No")"
+    if [ "$START_CHUNK_INDEX" -gt 0 ]; then
+        echo -e "Start chunk index: $START_CHUNK_INDEX"
+    fi
+    if [ -n "$INIT_TRANSCRIPT_FILE" ]; then
+        echo -e "Initialize from: $INIT_TRANSCRIPT_FILE"
+    fi
     echo ""
 
     # Extract audio
     audio_file=$(extract_audio "$input_file")
 
     # Transcribe
-    transcript_file=$(process_chunks "$audio_file")
+    transcript_file=$(process_chunks "$audio_file" "$transcript_output")
 
     # Check transcript
     if [ ! -s "$transcript_file" ]; then
