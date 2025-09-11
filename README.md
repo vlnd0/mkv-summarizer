@@ -8,6 +8,8 @@ An AI-powered video summarization tool that extracts audio from MKV files, trans
 - 🎵 **Smart Chunking**: Automatically splits long audio into 20-minute chunks for API limits
 - 🗣️ **AI Transcription**: Uses OpenAI Whisper for accurate speech-to-text conversion
 - 🤖 **Intelligent Summarization**: Leverages Claude AI for structured, comprehensive summaries
+- 📄 **Smart Transcript Processing**: Automatic chunking for large transcripts with intelligent token management
+- 🔄 **Robust Error Handling**: Retry logic with exponential backoff for API rate limits
 - 📝 **Flexible Output**: Optional transcript saving with configurable retention
 - ⚙️ **System Integration**: Self-installing script with system-wide availability
 - 🔧 **Configurable**: Customizable audio quality, chunk duration, and processing options
@@ -131,8 +133,9 @@ export ENABLE_SPEAKERS=false
 3. **Smart Chunking**: Splits audio into 20-minute chunks to respect API limits
 4. **Transcription**: Each chunk is processed through OpenAI's Whisper API
 5. **Consolidation**: All transcripts are combined into a single document
-6. **Summarization**: The complete transcript is sent to Claude for AI summarization
-7. **Output**: Generates a markdown summary file and optionally saves the transcript
+6. **Intelligent Processing**: Automatically detects large transcripts (>20K tokens) and applies chunked processing
+7. **Summarization**: Uses either single-request or multi-chunk approach with Claude AI
+8. **Output**: Generates a comprehensive markdown summary file and optionally saves the transcript
 
 ## Command Options
 
@@ -158,12 +161,36 @@ The tool generates files in the same directory as the input video:
 - **Error Handling**: Comprehensive validation and cleanup mechanisms
 - **Configuration Management**: Flexible config file and environment variable support
 
+### Enhanced Processing Features
+
+#### Intelligent Transcript Chunking
+- **Automatic Detection**: Analyzes transcript size and applies appropriate processing strategy
+- **Token Estimation**: Smart calculation of approximate token count for optimization
+- **Chunk Management**: Splits large transcripts while preserving sentence boundaries
+- **Progress Tracking**: Real-time feedback during multi-chunk processing
+
+#### Robust Error Handling
+- **Rate Limit Management**: Automatic detection and handling of API rate limits
+- **Exponential Backoff**: Smart retry timing (30s, 60s, 90s) to prevent API overload  
+- **Failure Recovery**: Graceful handling of individual chunk failures
+- **Progress Preservation**: Maintains processing state across retries
+
+#### Processing Strategies
+- **Small Transcripts** (<20K tokens): Single-request processing for optimal speed
+- **Large Transcripts** (>20K tokens): Multi-chunk processing with synthesis
+- **Chunk Processing**: Individual summarization with final comprehensive synthesis
+- **Quality Assurance**: Validates successful processing at each stage
+
 ### Processing Flow
 
 ```
-MKV File → Audio Extraction → Chunking → Transcription → Summarization → Output
-    ↓           ↓              ↓           ↓             ↓            ↓
-  FFmpeg    MP3 Format    20min chunks   Whisper API   Claude API   Markdown
+MKV File → Audio Extraction → Chunking → Transcription → Transcript Analysis → Summarization → Output
+    ↓           ↓              ↓           ↓                    ↓              ↓            ↓
+  FFmpeg    MP3 Format    20min chunks   Whisper API      Token Count    Claude API   Markdown
+                                                              ↓
+                                                    Single Request ← Small (<20K tokens)
+                                                         OR
+                                                    Chunked Processing ← Large (>20K tokens)
 ```
 
 ## API Usage & Costs
@@ -175,8 +202,10 @@ MKV File → Audio Extraction → Chunking → Transcription → Summarization �
 
 ### Anthropic Claude
 - Model: `claude-3-5-sonnet-20241022`
-- Pricing: Based on token usage
+- Pricing: Based on token usage (~$3 per million input tokens)
 - Context: Optimized for comprehensive document analysis
+- Smart Processing: Automatically switches between single-request and chunked processing
+- Rate Limiting: Built-in retry logic with exponential backoff for reliability
 
 ## Troubleshooting
 
@@ -202,9 +231,17 @@ sudo apt install ffmpeg  # Ubuntu/Debian
 - Ensure the keys have the necessary permissions
 
 **Large file processing:**
-- The tool automatically chunks long audio files
+- The tool automatically chunks long audio files (20-minute segments)
+- Large transcripts (>20K tokens) are automatically processed in chunks
+- Built-in rate limit handling with automatic retries and delays
 - Very large files may take considerable time and cost
 - Consider the 20-minute chunk duration setting for optimization
+
+**Rate limit errors:**
+- The tool includes automatic retry logic for API rate limits
+- Exponential backoff strategy prevents overwhelming the APIs
+- Progress is maintained across retries and chunk processing
+- Large transcripts are processed with delays between chunks
 
 ## Contributing
 
