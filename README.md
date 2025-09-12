@@ -108,6 +108,15 @@ KEEP_TRANSCRIPT=true
 # Enable speaker identification and timestamps (true/false)
 ENABLE_SPEAKERS=false
 
+# Save transcript on error (true/false)
+SAVE_ON_ERROR=false
+
+# Start chunk index (0 = beginning)
+START_CHUNK_INDEX=0
+
+# Initialize transcript from existing file (leave empty for new transcript)
+INIT_TRANSCRIPT_FILE=
+
 # Audio quality for extraction (lower = smaller file)
 AUDIO_BITRATE=64k
 
@@ -119,12 +128,25 @@ CHUNK_DURATION=1200
 
 Alternatively, set environment variables:
 
+All configuration options can be overridden with environment variables:
+
 ```bash
 export OPENAI_API_KEY="your-openai-api-key"
 export ANTHROPIC_API_KEY="your-anthropic-api-key"
 export KEEP_TRANSCRIPT=true
 export ENABLE_SPEAKERS=false
+export SAVE_ON_ERROR=false
+export START_CHUNK_INDEX=0
+export INIT_TRANSCRIPT_FILE=""
+export AUDIO_BITRATE=64k
+export CHUNK_DURATION=1200
 ```
+
+### Configuration Priority
+1. Command-line arguments (highest priority)
+2. Environment variables
+3. Configuration file settings
+4. Built-in defaults (lowest priority)
 
 ## How It Works
 
@@ -137,13 +159,68 @@ export ENABLE_SPEAKERS=false
 7. **Summarization**: Uses either single-request or multi-chunk approach with Claude AI
 8. **Output**: Generates a comprehensive markdown summary file and optionally saves the transcript
 
-## Command Options
+## Command Line Options
 
+### Core Operations
 | Option | Description |
 |--------|-------------|
 | `--install` | Install script system-wide to `/usr/local/bin/mkv-summarize` |
+| `--help`, `-h` | Display comprehensive help information |
+
+### Transcript Management
+| Option | Description |
+|--------|-------------|
+| `--transcript` | Save the transcript file (default behavior) |
 | `--no-transcript` | Process video without saving transcript file |
-| `--help` | Display help information |
+
+### Speaker Features
+| Option | Description |
+|--------|-------------|
+| `--speakers` | Enable speaker identification and timestamps in transcript |
+| `--no-speakers` | Disable speaker identification (default) |
+
+### Error Recovery Options
+| Option | Description |
+|--------|-------------|
+| `--save-on-error` | Save partial transcript when chunk processing fails |
+| `--no-save-on-error` | Don't save transcript on error (default) |
+| `--start-chunk INDEX` | Resume processing from specific chunk index (0-based) |
+| `--init-transcript FILE` | Initialize transcript from existing file path |
+
+## Usage Examples
+
+### Basic Processing
+```bash
+# Simple processing with default settings
+mkv-summarize presentation.mkv
+
+# Process without saving transcript
+mkv-summarize --no-transcript lecture.mkv
+
+# Enable speaker identification
+mkv-summarize --speakers meeting.mkv
+```
+
+### Advanced Processing Options
+```bash
+# Resume processing from chunk 5 after interruption
+mkv-summarize --start-chunk 5 --save-on-error large_file.mkv
+
+# Continue processing with existing transcript
+mkv-summarize --init-transcript partial_transcript.txt video.mkv
+
+# Full feature processing
+mkv-summarize --speakers --save-on-error --transcript conference.mkv
+```
+
+### Environment Variable Usage
+```bash
+# Override default settings with environment variables
+ENABLE_SPEAKERS=true KEEP_TRANSCRIPT=false mkv-summarize video.mkv
+
+# Process with custom chunk settings
+CHUNK_DURATION=1800 START_CHUNK_INDEX=3 mkv-summarize video.mkv
+```
 
 ## Output Files
 
