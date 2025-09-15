@@ -7,7 +7,8 @@ An AI-powered video summarization tool that extracts audio from MKV files, trans
 - 🎬 **Video Processing**: Extracts audio from MKV video files using FFmpeg
 - 🎵 **Smart Chunking**: Automatically splits long audio into 20-minute chunks for API limits
 - 🗣️ **AI Transcription**: Uses OpenAI Whisper for accurate speech-to-text conversion
-- 🤖 **Intelligent Summarization**: Leverages Claude AI for structured, comprehensive summaries
+- 👥 **Speaker Detection**: Advanced speaker identification and separation with timestamps
+- 🤖 **Intelligent Summarization**: Leverages Claude AI for structured, comprehensive summaries with speaker analysis
 - 📄 **Smart Transcript Processing**: Automatic chunking for large transcripts with intelligent token management
 - 🔄 **Robust Error Handling**: Retry logic with exponential backoff for API rate limits
 - 📝 **Flexible Output**: Optional transcript saving with configurable retention
@@ -106,6 +107,7 @@ ANTHROPIC_API_KEY="your-anthropic-key-here"
 KEEP_TRANSCRIPT=true
 
 # Enable speaker identification and timestamps (true/false)
+# When enabled, provides enhanced transcription with speaker separation and timing
 ENABLE_SPEAKERS=false
 
 # Save transcript on error (true/false)
@@ -153,11 +155,12 @@ export CHUNK_DURATION=1200
 1. **Audio Extraction**: FFmpeg extracts MP3 audio from the input MKV file
 2. **Duration Check**: Calculates total audio duration for processing planning
 3. **Smart Chunking**: Splits audio into 20-minute chunks to respect API limits
-4. **Transcription**: Each chunk is processed through OpenAI's Whisper API
-5. **Consolidation**: All transcripts are combined into a single document
-6. **Intelligent Processing**: Automatically detects large transcripts (>20K tokens) and applies chunked processing
-7. **Summarization**: Uses either single-request or multi-chunk approach with Claude AI
-8. **Output**: Generates a comprehensive markdown summary file and optionally saves the transcript
+4. **Enhanced Transcription**: Each chunk is processed through OpenAI's Whisper API with optional speaker detection
+5. **Speaker Analysis**: When enabled, applies enhanced prompts for better speaker separation and timestamps
+6. **Consolidation**: All transcripts are combined into a single document with speaker markers
+7. **Intelligent Processing**: Automatically detects large transcripts (>20K tokens) and applies chunked processing
+8. **Multi-Speaker Summarization**: Uses either single-request or multi-chunk approach with Claude AI, intelligently detecting and analyzing speaker contributions
+9. **Output**: Generates a comprehensive markdown summary with speaker insights and optionally saves the transcript
 
 ## Command Line Options
 
@@ -176,7 +179,7 @@ export CHUNK_DURATION=1200
 ### Speaker Features
 | Option | Description |
 |--------|-------------|
-| `--speakers` | Enable speaker identification and timestamps in transcript |
+| `--speakers` | Enable speaker identification, timestamps, and enhanced summarization for multi-speaker content |
 | `--no-speakers` | Disable speaker identification (default) |
 
 ### Error Recovery Options
@@ -197,8 +200,11 @@ mkv-summarize presentation.mkv
 # Process without saving transcript
 mkv-summarize --no-transcript lecture.mkv
 
-# Enable speaker identification
+# Enable speaker identification for meetings/conversations
 mkv-summarize --speakers meeting.mkv
+
+# Combined processing with speaker detection and transcript saving
+mkv-summarize --speakers --transcript conference.mkv
 ```
 
 ### Advanced Processing Options
@@ -222,12 +228,56 @@ ENABLE_SPEAKERS=true KEEP_TRANSCRIPT=false mkv-summarize video.mkv
 CHUNK_DURATION=1800 START_CHUNK_INDEX=3 mkv-summarize video.mkv
 ```
 
+### Speaker Detection Best Practices
+
+**When to Enable Speaker Detection:**
+- Multi-person meetings, interviews, or discussions
+- Conference calls, presentations with Q&A
+- Podcasts, webinars, or panel discussions
+- Any video with multiple participants speaking
+
+**Optimal Use Cases:**
+```bash
+# Team meetings and standups
+mkv-summarize --speakers daily_standup.mkv
+
+# Interview recordings
+mkv-summarize --speakers --transcript interview.mkv
+
+# Conference sessions with multiple speakers
+mkv-summarize --speakers conference_panel.mkv
+
+# Training sessions with instructor and participants
+mkv-summarize --speakers training_session.mkv
+```
+
+**Expected Benefits:**
+- Better transcription accuracy for multi-speaker content
+- Automatic identification of speaker roles and contributions
+- Enhanced summaries with per-speaker insights
+- Context-aware analysis (meeting types, discussion patterns)
+
 ## Output Files
 
 The tool generates files in the same directory as the input video:
 
-- `{filename}_summary.md` - AI-generated summary in markdown format
-- `{filename}_transcript.txt` - Full transcript (if `KEEP_TRANSCRIPT=true`)
+- `{filename}_summary.md` - AI-generated summary in markdown format with speaker analysis (when enabled)
+- `{filename}_transcript.txt` - Full transcript with speaker timestamps (if `KEEP_TRANSCRIPT=true`)
+
+### Speaker Detection Output
+
+When speaker detection is enabled (`--speakers` or `ENABLE_SPEAKERS=true`), the output includes:
+
+**Enhanced Transcripts:**
+- Timestamped segments with precise timing (MM:SS format)
+- Speaker separation markers for better readability
+- Improved transcription quality through enhanced prompts
+
+**Intelligent Summaries:**
+- **Speaker Analysis**: Individual speaker insights and contributions
+- **Role Identification**: Automatic detection of meeting types (daily standup, interview, etc.)
+- **Key Contributions**: Highlights what each speaker discussed
+- **Context Detection**: Identifies conversation type and participant roles
 
 ## Architecture
 
@@ -261,27 +311,32 @@ The tool generates files in the same directory as the input video:
 ### Processing Flow
 
 ```
-MKV File → Audio Extraction → Chunking → Transcription → Transcript Analysis → Summarization → Output
-    ↓           ↓              ↓           ↓                    ↓              ↓            ↓
-  FFmpeg    MP3 Format    20min chunks   Whisper API      Token Count    Claude API   Markdown
-                                                              ↓
-                                                    Single Request ← Small (<20K tokens)
-                                                         OR
-                                                    Chunked Processing ← Large (>20K tokens)
+MKV File → Audio Extraction → Chunking → Enhanced Transcription → Transcript Analysis → Summarization → Output
+    ↓           ↓              ↓              ↓                        ↓              ↓            ↓
+  FFmpeg    MP3 Format    20min chunks   Whisper API             Token Count    Claude API   Markdown
+                                           ↓                          ↓              ↓
+                                    Speaker Detection           Single Request ← Small (<20K tokens)
+                                      (Optional)                     OR
+                                    ↓                         Chunked Processing ← Large (>20K tokens)
+                               Enhanced Prompts                      ↓
+                               Timestamps                     Speaker Analysis
+                               Speaker Markers                (When Enabled)
 ```
 
 ## API Usage & Costs
 
 ### OpenAI Whisper
-- Model: `whisper-1`
+- Model: `whisper-1` (with enhanced speaker prompts when enabled)
 - Pricing: ~$0.006 per minute of audio
 - Rate limits: Handled by chunking strategy
+- Speaker Features: Enhanced prompts for multi-speaker identification and separation
 
 ### Anthropic Claude
 - Model: `claude-3-5-sonnet-20241022`
 - Pricing: Based on token usage (~$3 per million input tokens)
 - Context: Optimized for comprehensive document analysis
 - Smart Processing: Automatically switches between single-request and chunked processing
+- Speaker Analysis: Enhanced prompts for multi-speaker conversation analysis
 - Rate Limiting: Built-in retry logic with exponential backoff for reliability
 
 ## Troubleshooting

@@ -490,7 +490,7 @@ transcribe_audio() {
 
     # Build the curl command based on speaker settings
     if [ "$ENABLE_SPEAKERS" == "true" ]; then
-        echo -e "${BLUE}Speaker identification enabled${NC}" >&2
+        echo -e "${BLUE}Speaker identification enabled - using enhanced prompt for better speaker separation${NC}" >&2
         response=$(curl -s -w "%{http_code}" --request POST \
             --url https://api.openai.com/v1/audio/transcriptions \
             --header "Authorization: Bearer $OPENAI_API_KEY" \
@@ -498,7 +498,8 @@ transcribe_audio() {
             --form "file=@$audio_file" \
             --form "model=whisper-1" \
             --form "response_format=verbose_json" \
-            --form "timestamp_granularities[]=segment")
+            --form "timestamp_granularities[]=segment" \
+            --form "prompt=This recording contains multiple speakers. Please separate their speech clearly and identify when different speakers are talking. Include timestamps for each speaker segment to help distinguish between different voices and conversation participants.")
     else
         response=$(curl -s -w "%{http_code}" --request POST \
             --url https://api.openai.com/v1/audio/transcriptions \
@@ -532,23 +533,28 @@ transcribe_audio() {
 
     # Process response based on format
     if [ "$ENABLE_SPEAKERS" == "true" ]; then
-        # Parse JSON response and format with speaker info and timestamps
+        # Parse JSON response and format with enhanced speaker info and timestamps
         local formatted_text=$(echo "$response" | jq -r '
             if .segments then
                 .segments[] |
-                "[" + (.start | tostring) + "s - " + (.end | tostring) + "s] " + .text
+                "TIMESTAMP [" + (.start | floor | tostring) + ":" + ((.start % 60) | floor | tostring | if length == 1 then "0" + . else . end) +
+                " - " + (.end | floor | tostring) + ":" + ((.end % 60) | floor | tostring | if length == 1 then "0" + . else . end) + "] " + .text
             else
                 .text // "No transcription available"
-            end' | tr '\n' ' ' | sed 's/  / /g')
+            end')
 
         if [ -z "$formatted_text" ] || [ "$formatted_text" == "No transcription available" ]; then
             # Fallback to simple text extraction
             formatted_text=$(echo "$response" | jq -r '.text // "No transcription available"')
         fi
 
+        # Add speaker detection markers and formatting
+        echo "=== AUDIO SEGMENT WITH TIMESTAMPS ===" >> "$output_file"
         echo "$formatted_text" >> "$output_file"
+        echo "=== END SEGMENT ===" >> "$output_file"
+
         local word_count=$(echo "$formatted_text" | wc -w)
-        echo -e "${GREEN}Transcription with timestamps completed ($word_count words)${NC}" >&2
+        echo -e "${GREEN}Transcription with speaker timestamps completed ($word_count words)${NC}" >&2
     else
         # Simple text format
         echo "$response" >> "$output_file"
@@ -720,19 +726,26 @@ summarize_chunk_with_claude() {
 
     local transcript_chunk=$(cat "$chunk_file" | jq -Rs .)
 
+    # Detect if this is a multi-speaker transcript
+    local speaker_context=""
+    if echo "$transcript_chunk" | grep -q "TIMESTAMP\|===.*SEGMENT"; then
+        speaker_context="This transcript contains multiple speakers with timestamps. "
+    fi
+
     # Create chunk-specific prompt
-    local chunk_prompt="You are analyzing part $chunk_num of $total_chunks from a video transcript. Please provide a summary IN RUSSIAN:
+    local chunk_prompt="You are analyzing part $chunk_num of $total_chunks from a video transcript. ${speaker_context}Please provide a summary IN RUSSIAN:
 
 For this chunk, provide:
 1. SUMMARY of this part (КРАТКОЕ ИЗЛОЖЕНИЕ ЧАСТИ)
 2. KEY POINTS from this section (КЛЮЧЕВЫЕ МОМЕНТЫ)
 3. MAIN TOPICS in this part (ОСНОВНЫЕ ТЕМЫ)
+$(if [ -n "$speaker_context" ]; then echo "4. SPEAKER INSIGHTS - key points for each speaker if distinguishable (ОСНОВНЫЕ ИДЕИ ПО СПИКЕРАМ)"; fi)
 
 Here is the transcript chunk:
 
 $transcript_chunk
 
-Please format your response clearly. IMPORTANT: Provide the summary entirely in Russian, regardless of the original transcript language."
+Please format your response clearly. IMPORTANT: Provide the summary entirely in Russian, regardless of the original transcript language. $(if [ -n "$speaker_context" ]; then echo "If multiple speakers are present, try to identify their main contributions and perspectives."; fi)"
 
     # Create request body
     local request_body=$(jq -n \
@@ -809,6 +822,12 @@ combine_chunk_summaries() {
         done
     } > "$combined_file"
 
+    # Detect if this involves multiple speakers by checking combined summaries
+    local speaker_synthesis=""
+    if grep -q "СПИКЕРАМ\|SPEAKER" "$combined_file"; then
+        speaker_synthesis="5. SPEAKER ANALYSIS - synthesis of different speakers' contributions, roles, and key insights if multiple speakers were identified (АНАЛИЗ УЧАСТНИКОВ)"
+    fi
+
     # Create final synthesis prompt
     local synthesis_prompt="Based on the following partial summaries of a video, create a comprehensive final summary IN RUSSIAN:
 
@@ -816,12 +835,13 @@ combine_chunk_summaries() {
 2. KEY POINTS from all parts (КЛЮЧЕВЫЕ МОМЕНТЫ)
 3. MAIN TOPICS discussed throughout (ОСНОВНЫЕ ТЕМЫ)
 4. ACTION ITEMS or important conclusions (ПЛАН ДЕЙСТВИЙ)
+$(if [ -n "$speaker_synthesis" ]; then echo "$speaker_synthesis"; fi)
 
 Here are the partial summaries:
 
 $(cat "$combined_file" | jq -Rs .)
 
-Please create a coherent, comprehensive summary that synthesizes all the information. IMPORTANT: Provide the final summary entirely in Russian."
+Please create a coherent, comprehensive summary that synthesizes all the information. IMPORTANT: Provide the final summary entirely in Russian.$(if [ -n "$speaker_synthesis" ]; then echo " If multiple speakers were identified across the parts, provide insights about each speaker's main contributions, whether this was a meeting, discussion, interview, or other type of conversation."; fi)"
 
     # Create synthesis request
     local synthesis_request=$(jq -n \
@@ -896,19 +916,28 @@ summarize_with_claude() {
     if [ "$estimated_tokens" -le 20000 ]; then
         echo -e "${GREEN}Transcript is small enough for single request${NC}"
 
+        # Detect if this is a multi-speaker transcript
+        local speaker_context=""
+        local speaker_section=""
+        if echo "$transcript_text" | grep -q "TIMESTAMP\|===.*SEGMENT"; then
+            speaker_context="This transcript contains multiple speakers with timestamps. "
+            speaker_section="5. SPEAKER ANALYSIS - key insights from each speaker if multiple speakers are identifiable (АНАЛИЗ УЧАСТНИКОВ)"
+        fi
+
         local transcript_escaped=$(echo "$transcript_text" | jq -Rs .)
-        local prompt="You are analyzing a transcript from a video. Please provide a summary IN RUSSIAN:
+        local prompt="You are analyzing a transcript from a video. ${speaker_context}Please provide a summary IN RUSSIAN:
 
 1. A comprehensive SUMMARY of the entire conversation/content (КРАТКОЕ ИЗЛОЖЕНИЕ)
 2. KEY POINTS (bullet points of the most important information) (КЛЮЧЕВЫЕ МОМЕНТЫ)
 3. MAIN TOPICS discussed (ОСНОВНЫЕ ТЕМЫ)
 4. Any ACTION ITEMS or important conclusions (ПЛАН ДЕЙСТВИЙ)
+$(if [ -n "$speaker_section" ]; then echo "$speaker_section"; fi)
 
 Here is the transcript:
 
 $transcript_escaped
 
-Please format your response in clear sections with headers. IMPORTANT: Provide the summary entirely in Russian, regardless of the original transcript language."
+Please format your response in clear sections with headers. IMPORTANT: Provide the summary entirely in Russian, regardless of the original transcript language.$(if [ -n "$speaker_context" ]; then echo " If multiple speakers are present, identify their roles and main contributions (e.g., if this is a daily standup, meeting, interview, etc.)."; fi)"
 
         local request_body=$(jq -n \
             --arg content "$prompt" \
