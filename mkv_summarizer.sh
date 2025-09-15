@@ -16,6 +16,7 @@ SAVE_ON_ERROR="${SAVE_ON_ERROR:-false}"  # Default: don't save on error
 START_CHUNK_INDEX="${START_CHUNK_INDEX:-0}"  # Default: start from beginning
 INIT_TRANSCRIPT_FILE="${INIT_TRANSCRIPT_FILE:-}"  # Default: empty transcript file
 CREATE_OUTPUT_DIR="${CREATE_OUTPUT_DIR:-true}"  # Default: create output directory
+CUSTOM_PROMPT="${CUSTOM_PROMPT:-}"  # Default: no custom prompt
 INSTALL_PATH="/usr/local/bin/mkv-summarize"
 
 # Colors for output
@@ -85,6 +86,9 @@ CHUNK_DURATION=1200
 
 # Create output directory for organized file storage (true/false)
 CREATE_OUTPUT_DIR=true
+
+# Custom prompt for better context (e.g., "This is a daily standup meeting" or "This is a technical interview")
+CUSTOM_PROMPT=
 EOF
             echo -e "${GREEN}Config file created. Please edit: $config_dir/config${NC}"
         fi
@@ -113,6 +117,7 @@ load_config() {
     SAVE_ON_ERROR="false"
     START_CHUNK_INDEX="0"
     INIT_TRANSCRIPT_FILE=""
+    CUSTOM_PROMPT=""
 
     # Load config file if exists
     local config_file="$HOME/.config/mkv-summarizer/config"
@@ -129,6 +134,7 @@ load_config() {
     SAVE_ON_ERROR="${SAVE_ON_ERROR:-false}"
     START_CHUNK_INDEX="${START_CHUNK_INDEX:-0}"
     INIT_TRANSCRIPT_FILE="${INIT_TRANSCRIPT_FILE:-}"
+    CUSTOM_PROMPT="${CUSTOM_PROMPT:-}"
 }
 
 # Help function
@@ -150,6 +156,7 @@ OPTIONS:
     --init-transcript FILE Initialize transcript from existing file
     --create-dir          Create output directory for organized files (default)
     --no-create-dir       Save files in same directory as input video
+    --custom-prompt TEXT  Add custom context for better summarization
     --install             Install script system-wide
     --help                Show this help message
 
@@ -162,6 +169,7 @@ ENVIRONMENT:
     START_CHUNK_INDEX    Set chunk index to start from (0-based)
     INIT_TRANSCRIPT_FILE Path to existing transcript file to initialize from
     CREATE_OUTPUT_DIR    Set to 'false' to disable output directory creation
+    CUSTOM_PROMPT        Add custom context for better summarization
 
 FILES:
     The summary will be saved as: <video_name>_summary.md (contains Russian summary)
@@ -178,6 +186,7 @@ EXAMPLES:
     $(basename $0) --save-on-error --start-chunk 5 movie.mkv
     $(basename $0) --init-transcript existing_transcript.txt movie.mkv
     $(basename $0) --no-create-dir movie.mkv
+    $(basename $0) --custom-prompt "This is a daily standup meeting" video.mkv
     ENABLE_SPEAKERS=true $(basename $0) video.mkv
 
 EOF
@@ -192,6 +201,7 @@ parse_args() {
     START_CHUNK_INDEX_ARG=""
     INIT_TRANSCRIPT_FILE_ARG=""
     CREATE_OUTPUT_DIR_ARG=""
+    CUSTOM_PROMPT_ARG=""
     INPUT_FILE=""
 
     while [[ $# -gt 0 ]]; do
@@ -252,6 +262,15 @@ parse_args() {
                     exit 1
                 fi
                 ;;
+            --custom-prompt)
+                if [ -n "$2" ]; then
+                    CUSTOM_PROMPT_ARG="$2"
+                    shift 2
+                else
+                    echo -e "${RED}Error: --custom-prompt requires a text argument${NC}"
+                    exit 1
+                fi
+                ;;
             *)
                 if [ -z "$INPUT_FILE" ]; then
                     INPUT_FILE="$1"
@@ -287,6 +306,10 @@ parse_args() {
 
     if [ ! -z "$CREATE_OUTPUT_DIR_ARG" ]; then
         CREATE_OUTPUT_DIR="$CREATE_OUTPUT_DIR_ARG"
+    fi
+
+    if [ ! -z "$CUSTOM_PROMPT_ARG" ]; then
+        CUSTOM_PROMPT="$CUSTOM_PROMPT_ARG"
     fi
 
     if [ -z "$INPUT_FILE" ]; then
@@ -732,8 +755,13 @@ summarize_chunk_with_claude() {
         speaker_context="This transcript contains multiple speakers with timestamps. "
     fi
 
-    # Create chunk-specific prompt
-    local chunk_prompt="You are analyzing part $chunk_num of $total_chunks from a video transcript. ${speaker_context}Please provide a summary IN RUSSIAN:
+    # Create chunk-specific prompt with custom context if provided
+    local custom_context=""
+    if [ -n "$CUSTOM_PROMPT" ]; then
+        custom_context="Additional context: $CUSTOM_PROMPT. "
+    fi
+
+    local chunk_prompt="You are analyzing part $chunk_num of $total_chunks from a video transcript. ${custom_context}${speaker_context}Please provide a summary IN RUSSIAN:
 
 For this chunk, provide:
 1. SUMMARY of this part (КРАТКОЕ ИЗЛОЖЕНИЕ ЧАСТИ)
@@ -924,8 +952,14 @@ summarize_with_claude() {
             speaker_section="5. SPEAKER ANALYSIS - key insights from each speaker if multiple speakers are identifiable (АНАЛИЗ УЧАСТНИКОВ)"
         fi
 
+        # Add custom context if provided
+        local custom_context=""
+        if [ -n "$CUSTOM_PROMPT" ]; then
+            custom_context="Additional context: $CUSTOM_PROMPT. "
+        fi
+
         local transcript_escaped=$(echo "$transcript_text" | jq -Rs .)
-        local prompt="You are analyzing a transcript from a video. ${speaker_context}Please provide a summary IN RUSSIAN:
+        local prompt="You are analyzing a transcript from a video. ${custom_context}${speaker_context}Please provide a summary IN RUSSIAN:
 
 1. A comprehensive SUMMARY of the entire conversation/content (КРАТКОЕ ИЗЛОЖЕНИЕ)
 2. KEY POINTS (bullet points of the most important information) (КЛЮЧЕВЫЕ МОМЕНТЫ)
@@ -1071,6 +1105,9 @@ main() {
     fi
     if [ -n "$INIT_TRANSCRIPT_FILE" ]; then
         echo -e "Initialize from: $INIT_TRANSCRIPT_FILE"
+    fi
+    if [ -n "$CUSTOM_PROMPT" ]; then
+        echo -e "Custom context: $CUSTOM_PROMPT"
     fi
     echo ""
 

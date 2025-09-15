@@ -9,6 +9,7 @@ An AI-powered video summarization tool that extracts audio from MKV files, trans
 - 🗣️ **AI Transcription**: Uses OpenAI Whisper for accurate speech-to-text conversion
 - 👥 **Speaker Detection**: Advanced speaker identification and separation with timestamps
 - 🤖 **Intelligent Summarization**: Leverages Claude AI for structured, comprehensive summaries with speaker analysis
+- 🎯 **Context-Aware Processing**: Custom prompts for enhanced summarization based on meeting types and technical contexts
 - 📄 **Smart Transcript Processing**: Automatic chunking for large transcripts with intelligent token management
 - 🔄 **Robust Error Handling**: Retry logic with exponential backoff for API rate limits
 - 📝 **Flexible Output**: Optional transcript saving with configurable retention
@@ -124,6 +125,9 @@ AUDIO_BITRATE=64k
 
 # Chunk duration in seconds (default 20 minutes)
 CHUNK_DURATION=1200
+
+# Custom prompt for better context (e.g., "This is a daily standup meeting" or "This is a technical interview")
+CUSTOM_PROMPT=
 ```
 
 ### Environment Variables
@@ -142,6 +146,7 @@ export START_CHUNK_INDEX=0
 export INIT_TRANSCRIPT_FILE=""
 export AUDIO_BITRATE=64k
 export CHUNK_DURATION=1200
+export CUSTOM_PROMPT=""
 ```
 
 ### Configuration Priority
@@ -158,9 +163,10 @@ export CHUNK_DURATION=1200
 4. **Enhanced Transcription**: Each chunk is processed through OpenAI's Whisper API with optional speaker detection
 5. **Speaker Analysis**: When enabled, applies enhanced prompts for better speaker separation and timestamps
 6. **Consolidation**: All transcripts are combined into a single document with speaker markers
-7. **Intelligent Processing**: Automatically detects large transcripts (>20K tokens) and applies chunked processing
-8. **Multi-Speaker Summarization**: Uses either single-request or multi-chunk approach with Claude AI, intelligently detecting and analyzing speaker contributions
-9. **Output**: Generates a comprehensive markdown summary with speaker insights and optionally saves the transcript
+7. **Context Integration**: Custom prompts are integrated into summarization requests for domain-specific analysis
+8. **Intelligent Processing**: Automatically detects large transcripts (>20K tokens) and applies chunked processing
+9. **Context-Aware Summarization**: Uses either single-request or multi-chunk approach with Claude AI, incorporating custom context for enhanced technical and business insights
+10. **Output**: Generates a comprehensive markdown summary with speaker insights, technical decisions, and context-specific analysis, optionally saves the transcript
 
 ## Command Line Options
 
@@ -182,6 +188,11 @@ export CHUNK_DURATION=1200
 | `--speakers` | Enable speaker identification, timestamps, and enhanced summarization for multi-speaker content |
 | `--no-speakers` | Disable speaker identification (default) |
 
+### Context Enhancement
+| Option | Description |
+|--------|-------------|
+| `--custom-prompt TEXT` | Add custom context for enhanced summarization (e.g., meeting type, technical context) |
+
 ### Error Recovery Options
 | Option | Description |
 |--------|-------------|
@@ -192,40 +203,99 @@ export CHUNK_DURATION=1200
 
 ## Usage Examples
 
-### Basic Processing
+### Engineering Management Workflows
+
+#### Daily Operations & Team Management
 ```bash
-# Simple processing with default settings
-mkv-summarize presentation.mkv
+# Daily standup meetings - extract action items and blockers
+mkv-summarize --speakers --custom-prompt "This is a daily standup meeting with engineering team discussing sprint progress, blockers, and daily goals" standup_2024_01_15.mkv
 
-# Process without saving transcript
-mkv-summarize --no-transcript lecture.mkv
+# Sprint planning sessions - capture story estimations and technical decisions
+mkv-summarize --speakers --custom-prompt "This is a sprint planning meeting where the team is estimating user stories, discussing technical approach, and planning the upcoming sprint" sprint_planning_q1.mkv
 
-# Enable speaker identification for meetings/conversations
-mkv-summarize --speakers meeting.mkv
+# Sprint retrospectives - identify process improvements and team dynamics
+mkv-summarize --speakers --custom-prompt "This is a sprint retrospective meeting where the team discusses what went well, what didn't work, and process improvements for the next sprint" retro_sprint_24.mkv
 
-# Combined processing with speaker detection and transcript saving
-mkv-summarize --speakers --transcript conference.mkv
+# One-on-one meetings - track career development and performance discussions
+mkv-summarize --speakers --custom-prompt "This is a one-on-one meeting between an engineering manager and team member discussing career development, performance feedback, and goal setting" 1on1_john_q1.mkv
+```
+
+#### Cross-Functional Collaboration
+```bash
+# Product planning meetings - capture feature requirements and technical constraints
+mkv-summarize --speakers --custom-prompt "This is a product planning meeting with engineering, product, and design teams discussing feature requirements, technical feasibility, and roadmap priorities" product_planning_q2.mkv
+
+# Architecture review meetings - document technical decisions and trade-offs
+mkv-summarize --speakers --custom-prompt "This is an architecture review meeting where senior engineers discuss system design, technical trade-offs, scalability concerns, and implementation approaches" arch_review_microservices.mkv
+
+# Cross-team coordination meetings - track dependencies and integration points
+mkv-summarize --speakers --custom-prompt "This is a cross-team coordination meeting discussing API contracts, service dependencies, integration timelines, and potential blocking issues" integration_sync_week12.mkv
+
+# Technical debt planning - prioritize refactoring and infrastructure improvements
+mkv-summarize --speakers --custom-prompt "This is a technical debt planning meeting where the team discusses code quality issues, infrastructure improvements, and refactoring priorities" tech_debt_q1_planning.mkv
+```
+
+#### Technical Interviews & Knowledge Sharing
+```bash
+# Technical interviews - extract candidate assessment and decision factors
+mkv-summarize --speakers --custom-prompt "This is a technical interview with a senior software engineer candidate discussing system design, coding skills, and technical leadership experience" interview_sarah_senior_eng.mkv
+
+# Tech talks and presentations - capture key concepts and learnings
+mkv-summarize --custom-prompt "This is a technical presentation about microservices architecture, covering design patterns, best practices, and real-world implementation challenges" tech_talk_microservices.mkv
+
+# Knowledge sharing sessions - document team learning and best practices
+mkv-summarize --speakers --custom-prompt "This is a knowledge sharing session where a team member presents learnings from a recent project, including technical challenges and solutions" knowledge_share_redis_optimization.mkv
+
+# Code review sessions - capture feedback patterns and learning opportunities
+mkv-summarize --speakers --custom-prompt "This is a group code review session discussing code quality, design patterns, security considerations, and best practices" code_review_auth_service.mkv
+```
+
+#### Incident Response & Post-Mortems
+```bash
+# Incident response calls - track decisions and action items during outages
+mkv-summarize --speakers --custom-prompt "This is an incident response call during a production outage where the team is debugging issues, implementing fixes, and coordinating communication" incident_response_db_outage.mkv
+
+# Post-mortem meetings - extract root causes and prevention strategies
+mkv-summarize --speakers --custom-prompt "This is a post-mortem meeting analyzing a production incident, discussing root causes, timeline of events, and preventive measures" postmortem_api_latency.mkv
+
+# War room sessions - document critical decisions during high-priority fixes
+mkv-summarize --speakers --custom-prompt "This is a war room session for addressing critical production issues with multiple teams collaborating on diagnosis and resolution" warroom_payment_system.mkv
+```
+
+#### Strategic & Leadership Meetings
+```bash
+# Engineering all-hands - capture organizational updates and strategic direction
+mkv-summarize --speakers --custom-prompt "This is an engineering all-hands meeting covering company updates, technical strategy, organizational changes, and team achievements" eng_allhands_q1_2024.mkv
+
+# Technical roadmap planning - document strategic technical decisions
+mkv-summarize --speakers --custom-prompt "This is a technical roadmap planning meeting with engineering leadership discussing platform strategy, technology adoption, and long-term architectural goals" tech_roadmap_2024.mkv
+
+# Vendor evaluations - track decision criteria and technical assessments
+mkv-summarize --speakers --custom-prompt "This is a vendor evaluation meeting where the team is assessing third-party solutions, comparing technical capabilities, and discussing integration requirements" vendor_eval_monitoring.mkv
+
+# Budget and resource planning - capture technical investment decisions
+mkv-summarize --speakers --custom-prompt "This is a budget planning meeting discussing engineering resources, infrastructure costs, tool investments, and headcount allocation" budget_planning_h2.mkv
 ```
 
 ### Advanced Processing Options
 ```bash
-# Resume processing from chunk 5 after interruption
-mkv-summarize --start-chunk 5 --save-on-error large_file.mkv
+# Large conference sessions with multiple speakers and technical depth
+mkv-summarize --speakers --save-on-error --custom-prompt "This is a conference talk about distributed systems architecture with Q&A session covering scalability patterns and microservices design" conference_distributed_systems.mkv
 
-# Continue processing with existing transcript
-mkv-summarize --init-transcript partial_transcript.txt video.mkv
+# Training sessions with hands-on components
+mkv-summarize --speakers --transcript --custom-prompt "This is a technical training session on Kubernetes deployment strategies with live demos and troubleshooting exercises" k8s_training_advanced.mkv
 
-# Full feature processing
-mkv-summarize --speakers --save-on-error --transcript conference.mkv
+# Client meetings with technical discussions
+mkv-summarize --speakers --custom-prompt "This is a client meeting discussing API integration requirements, technical specifications, and implementation timeline" client_api_integration.mkv
 ```
 
 ### Environment Variable Usage
 ```bash
-# Override default settings with environment variables
-ENABLE_SPEAKERS=true KEEP_TRANSCRIPT=false mkv-summarize video.mkv
+# Process multiple files with consistent context
+CUSTOM_PROMPT="Daily standup meeting with sprint progress updates" mkv-summarize --speakers standup_*.mkv
 
-# Process with custom chunk settings
-CHUNK_DURATION=1800 START_CHUNK_INDEX=3 mkv-summarize video.mkv
+# Batch process interview recordings
+ENABLE_SPEAKERS=true CUSTOM_PROMPT="Technical interview for senior engineer position" mkv-summarize interview_*.mkv
 ```
 
 ### Speaker Detection Best Practices
@@ -256,6 +326,75 @@ mkv-summarize --speakers training_session.mkv
 - Automatic identification of speaker roles and contributions
 - Enhanced summaries with per-speaker insights
 - Context-aware analysis (meeting types, discussion patterns)
+
+### Custom Prompt Engineering for Engineering Management
+
+**Strategic Prompt Design Principles:**
+
+The `--custom-prompt` feature dramatically enhances AI summarization by providing contextual understanding of your meetings. As an Engineering Manager/Tech Lead, effective prompts should specify:
+
+1. **Meeting Type & Purpose**: Define the specific type of engineering meeting and its primary objectives
+2. **Participant Roles**: Identify key stakeholders (engineers, product managers, designers, leadership)
+3. **Technical Context**: Specify the technical domain, project phase, or system being discussed
+4. **Expected Outcomes**: Clarify what decisions, action items, or insights you're seeking
+
+**Prompt Effectiveness Framework:**
+
+```bash
+# High-Impact Template:
+--custom-prompt "This is a [MEETING_TYPE] with [PARTICIPANT_ROLES] discussing [TECHNICAL_CONTEXT] where the team is [PRIMARY_OBJECTIVES]"
+
+# Example Implementation:
+--custom-prompt "This is a sprint planning meeting with senior engineers and product owner discussing authentication service redesign where the team is estimating complexity, identifying risks, and planning implementation approach"
+```
+
+**Engineering Leadership Prompt Library:**
+
+**Team Dynamics & Process:**
+- `"Daily standup with distributed team discussing sprint progress, blockers, and cross-team dependencies"`
+- `"Sprint retrospective focusing on technical debt, process improvements, and team velocity optimization"`
+- `"Agile estimation session for complex backend infrastructure changes with senior engineering team"`
+
+**Technical Architecture & Strategy:**
+- `"Architecture design review for microservices migration with principal engineers discussing scalability and performance trade-offs"`
+- `"Technical debt prioritization meeting with team leads evaluating refactoring impact and resource allocation"`
+- `"System design discussion for high-traffic API service with focus on reliability and monitoring requirements"`
+
+**Cross-Functional Coordination:**
+- `"Product planning meeting with engineering, PM, and design discussing feature feasibility, technical constraints, and delivery timeline"`
+- `"Cross-team integration sync covering API contracts, service dependencies, and deployment coordination"`
+- `"Stakeholder alignment meeting discussing technical roadmap, resource requirements, and strategic priorities"`
+
+**Talent & Development:**
+- `"Technical interview for senior software engineer focusing on system design, coding skills, and leadership potential"`
+- `"Performance review discussion covering technical growth, project impact, and career development planning"`
+- `"Knowledge transfer session where senior engineer shares architectural decisions and implementation learnings"`
+
+**Incident & Operations:**
+- `"Post-mortem analysis of production outage covering root cause, timeline reconstruction, and prevention strategies"`
+- `"Incident response coordination call with on-call engineers diagnosing and resolving critical system failures"`
+- `"Operations review meeting discussing monitoring improvements, alerting optimization, and SLA compliance"`
+
+**Prompt Optimization Tips for Maximum Value:**
+
+1. **Be Specific About Technical Context**: Instead of "meeting about APIs", use "REST API design review for payment processing service"
+
+2. **Include Decision-Making Framework**: Add "where the team is evaluating options and making technical decisions"
+
+3. **Specify Expected Outputs**: Include "covering action items, technical decisions, and next steps"
+
+4. **Mention Key Stakeholders**: "with senior engineers, team leads, and architecture council"
+
+5. **Add Business Context**: "critical for Q2 roadmap delivery" or "required for compliance requirements"
+
+**Context-Aware Summarization Results:**
+
+With properly crafted prompts, the AI will generate summaries that include:
+- **Technical Decision Tracking**: Captures architectural choices, technology selections, and trade-off analysis
+- **Action Item Extraction**: Identifies specific tasks, owners, and deadlines with technical context
+- **Risk Identification**: Highlights technical risks, dependencies, and potential blockers
+- **Knowledge Capture**: Documents technical insights, learnings, and best practices shared
+- **Process Insights**: Analyzes team dynamics, communication patterns, and process effectiveness
 
 ## Output Files
 
