@@ -15,6 +15,7 @@ ENABLE_SPEAKERS="${ENABLE_SPEAKERS:-false}"  # Default: no speaker diarization
 SAVE_ON_ERROR="${SAVE_ON_ERROR:-false}"  # Default: don't save on error
 START_CHUNK_INDEX="${START_CHUNK_INDEX:-0}"  # Default: start from beginning
 INIT_TRANSCRIPT_FILE="${INIT_TRANSCRIPT_FILE:-}"  # Default: empty transcript file
+CREATE_OUTPUT_DIR="${CREATE_OUTPUT_DIR:-true}"  # Default: create output directory
 INSTALL_PATH="/usr/local/bin/mkv-summarize"
 
 # Colors for output
@@ -81,6 +82,9 @@ AUDIO_BITRATE=64k
 
 # Chunk duration in seconds (default 20 minutes)
 CHUNK_DURATION=1200
+
+# Create output directory for organized file storage (true/false)
+CREATE_OUTPUT_DIR=true
 EOF
             echo -e "${GREEN}Config file created. Please edit: $config_dir/config${NC}"
         fi
@@ -144,6 +148,8 @@ OPTIONS:
     --no-save-on-error    Don't save on error (default)
     --start-chunk INDEX   Start processing from chunk index (0-based)
     --init-transcript FILE Initialize transcript from existing file
+    --create-dir          Create output directory for organized files (default)
+    --no-create-dir       Save files in same directory as input video
     --install             Install script system-wide
     --help                Show this help message
 
@@ -155,11 +161,14 @@ ENVIRONMENT:
     SAVE_ON_ERROR        Set to 'true' to save transcript when chunks fail
     START_CHUNK_INDEX    Set chunk index to start from (0-based)
     INIT_TRANSCRIPT_FILE Path to existing transcript file to initialize from
+    CREATE_OUTPUT_DIR    Set to 'false' to disable output directory creation
 
 FILES:
     The summary will be saved as: <video_name>_summary.md (contains Russian summary)
     The transcript (if enabled): <video_name>_transcript.txt (original language transcription)
-    Both files are saved in the same directory as the input video
+
+    By default, files are saved in: <video_name>_summarizer_output/ directory
+    Use --no-create-dir to save files in the same directory as the input video
 
 EXAMPLES:
     $(basename $0) movie.mkv
@@ -168,6 +177,7 @@ EXAMPLES:
     $(basename $0) --speakers --no-transcript conference.mkv
     $(basename $0) --save-on-error --start-chunk 5 movie.mkv
     $(basename $0) --init-transcript existing_transcript.txt movie.mkv
+    $(basename $0) --no-create-dir movie.mkv
     ENABLE_SPEAKERS=true $(basename $0) video.mkv
 
 EOF
@@ -181,6 +191,7 @@ parse_args() {
     SAVE_ON_ERROR_ARG=""
     START_CHUNK_INDEX_ARG=""
     INIT_TRANSCRIPT_FILE_ARG=""
+    CREATE_OUTPUT_DIR_ARG=""
     INPUT_FILE=""
 
     while [[ $# -gt 0 ]]; do
@@ -213,6 +224,14 @@ parse_args() {
                 ;;
             --no-save-on-error)
                 SAVE_ON_ERROR_ARG="false"
+                shift
+                ;;
+            --create-dir)
+                CREATE_OUTPUT_DIR_ARG="true"
+                shift
+                ;;
+            --no-create-dir)
+                CREATE_OUTPUT_DIR_ARG="false"
                 shift
                 ;;
             --start-chunk)
@@ -264,6 +283,10 @@ parse_args() {
 
     if [ ! -z "$INIT_TRANSCRIPT_FILE_ARG" ]; then
         INIT_TRANSCRIPT_FILE="$INIT_TRANSCRIPT_FILE_ARG"
+    fi
+
+    if [ ! -z "$CREATE_OUTPUT_DIR_ARG" ]; then
+        CREATE_OUTPUT_DIR="$CREATE_OUTPUT_DIR_ARG"
     fi
 
     if [ -z "$INPUT_FILE" ]; then
@@ -996,13 +1019,21 @@ main() {
     local input_dir=$(dirname "$input_file")
     local base_name=$(basename "$input_file" .mkv)
 
-    # Output files in the same directory as input
-    local output_file="$input_dir/${base_name}_summary.md"
-    local transcript_output="$input_dir/${base_name}_transcript.txt"
+    # Determine output directory based on CREATE_OUTPUT_DIR setting
+    local output_dir="$input_dir"
+    if [ "$CREATE_OUTPUT_DIR" == "true" ]; then
+        output_dir="$input_dir/${base_name}_summarizer_output"
+        echo -e "${GREEN}Creating output directory: $output_dir${NC}"
+        mkdir -p "$output_dir"
+    fi
+
+    # Output files
+    local output_file="$output_dir/${base_name}_summary.md"
+    local transcript_output="$output_dir/${base_name}_transcript.txt"
 
     echo -e "${BLUE}=== MKV Video Summarizer ===${NC}"
     echo -e "Processing: $input_file"
-    echo -e "Output directory: $input_dir"
+    echo -e "Output directory: $output_dir"
     echo -e "Transcript: $([ "$KEEP_TRANSCRIPT" == "true" ] && echo "Yes" || echo "No")"
     echo -e "Speaker identification: $([ "$ENABLE_SPEAKERS" == "true" ] && echo "Yes" || echo "No")"
     echo -e "Save on error: $([ "$SAVE_ON_ERROR" == "true" ] && echo "Yes" || echo "No")"
